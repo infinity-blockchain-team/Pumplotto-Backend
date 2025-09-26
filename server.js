@@ -24,7 +24,7 @@ async function connectDB() {
 }
 
 
-connectDB()
+// connectDB()
 
 // === PRESALE END DATE/TIME MODEL ===
 const presaleEndSchema = new mongoose.Schema({
@@ -249,6 +249,7 @@ if (process.env.NODE_ENV !== 'production') {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
+
 
 
 
