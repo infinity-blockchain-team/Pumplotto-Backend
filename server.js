@@ -249,6 +249,8 @@ if (process.env.NODE_ENV !== 'production') {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
+// Export for Vercel:
+export default app;
 
 
 
