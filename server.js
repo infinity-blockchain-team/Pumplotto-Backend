@@ -24,7 +24,7 @@ async function connectDB() {
 }
 
 
-// connectDB()
+connectDB()
 
 // === PRESALE END DATE/TIME MODEL ===
 const presaleEndSchema = new mongoose.Schema({
@@ -163,10 +163,38 @@ app.get('/api/presale-end', async (req, res) => {
 
 
 // ADD/UPDATE Progress Bar Value (admin protected)
+// app.post('/api/progress-bar', authenticateJWT, async (req, res) => {
+//   await connectDB();
+//   const { value } = req.body;
+//   if (value === undefined) return res.status(400).json({ message: 'value is required' });
+
+//   try {
+//     let record = await ProgressBar.findOne();
+//     if (record) {
+//       record.value = value;
+//       await record.save();
+//     } else {
+//       record = await ProgressBar.create({ value });
+//     }
+//     res.json({ message: 'Progress bar value saved', data: record });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: 'Server error' });
+//   }
+// });
+
+// ADD/UPDATE Progress Bar Value (admin protected)
 app.post('/api/progress-bar', authenticateJWT, async (req, res) => {
   await connectDB();
-  const { value } = req.body;
-  if (value === undefined) return res.status(400).json({ message: 'value is required' });
+  let { value } = req.body;
+
+  // Validate presence
+  if (value === undefined) {
+    return res.status(400).json({ message: 'value is required' });
+  }
+
+  // Clamp value between 0 and 100
+  value = Math.max(0, Math.min(Number(value), 100));
 
   try {
     let record = await ProgressBar.findOne();
@@ -182,6 +210,7 @@ app.post('/api/progress-bar', authenticateJWT, async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+
 
 // GET Progress Bar Value
 app.get('/api/progress-bar', async (req, res) => {
@@ -249,9 +278,6 @@ if (process.env.NODE_ENV !== 'production') {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
-// Export for Vercel:
-export default app;
-
 
 
 
