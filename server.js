@@ -1,11 +1,10 @@
-import dotenv from 'dotenv';
-import express from 'express';
-import mongoose from 'mongoose';
-import cors from 'cors';
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
+require("dotenv").config();
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 
-dotenv.config();
 const app = express();
 
 app.use(cors());
@@ -16,37 +15,13 @@ let isConnected;
 async function connectDB() {
   if (isConnected) return;
   await mongoose.connect(process.env.Database_URL, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
+
   });
   isConnected = true;
   console.log('MongoDB Connected');
 }
-
-
 connectDB()
 
-// === PRESALE END DATE/TIME MODEL ===
-const presaleEndSchema = new mongoose.Schema({
-  endDateTime: { type: Date, required: true }
-}, { timestamps: true });
-
-const PresaleEnd = mongoose.models.PresaleEnd || mongoose.model("PresaleEnd", presaleEndSchema);
-
-
-// === PROGRESS BAR VALUE MODEL ===
-const progressBarSchema = new mongoose.Schema({
-  value: { type: Number, required: true } // store percentage or number of tokens
-}, { timestamps: true });
-
-const ProgressBar = mongoose.models.ProgressBar || mongoose.model("ProgressBar", progressBarSchema);
-
-
-const progressGoalSchema = new mongoose.Schema({
-  value: { type: Number, required: true } // store percentage or number of tokens
-}, { timestamps: true });
-
-const ProgressGoal = mongoose.models.ProgressGoal || mongoose.model("ProgressGoal", progressGoalSchema);
 
 
 const adminSchema = new mongoose.Schema({
@@ -54,13 +29,44 @@ const adminSchema = new mongoose.Schema({
   initialized: { type: Boolean, default: false },
 });
 
+const pollSchema = new mongoose.Schema({
+  question: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  option1: {
+    text: { type: String, required: true },
+    votes: { type: Number, default: 0 }
+  },
+  option2: {
+    text: { type: String, required: true },
+    votes: { type: Number, default: 0 }
+  },
+  isLive: {
+    type: Boolean,
+    default: true // true = live, false = ended
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+
+const userCreditSchema = new mongoose.Schema({
+  userId: { type: String, required: true, unique: true },
+  boughtCredits: { type: Number, default: 0 }
+});
+
+
+
+const UserCredit = mongoose.models.UserCredit || mongoose.model('UserCredit', userCreditSchema);
+
+
+const Poll = mongoose.models.Poll || mongoose.model("Poll", pollSchema);
+
 const Admin = mongoose.models.Admin || mongoose.model("Admin", adminSchema);
-
-const walletAddressSchema = new mongoose.Schema({
-  address: { type: String, required: true }
-}, { timestamps: true });
-
-const WalletAddress = mongoose.models.WalletAddress || mongoose.model("WalletAddress", walletAddressSchema);
 
 
 // === Middleware ===
@@ -76,6 +82,9 @@ const authenticateJWT = (req, res, next) => {
   }
 };
 
+app.get('/', (req, res) => {
+  res.send('API is running...');
+});
 
 async function initializeAdmin() {
   await connectDB();
@@ -129,50 +138,455 @@ app.post('/api/authenticate', async (req, res) => {
   }
 });
 
+
+//  Create Poll
+// app.post('/polls', async (req, res) => {
+//   try {
+//     const { question, option1Text, option2Text } = req.body;
+
+//     const poll = new Poll({
+//       question,
+//       option1: { text: option1Text },
+//       option2: { text: option2Text }
+//     });
+
+//     await poll.save();
+//     res.status(201).json(poll);
+//   } catch (err) {
+//     res.status(400).json({ error: err.message });
+//   }
+// });
+// ✅ Create Poll
+app.post('/polls', authenticateJWT, async (req, res) => {
+  try {
+    const { question, option1Text, option2Text } = req.body;
+
+
+    const existingLivePoll = await Poll.findOne({ isLive: true });
+    if (existingLivePoll) {
+      return res.status(400).json({
+        error: 'A poll is already active. End it before creating a new one.'
+      });
+    }
+
+  
+    const poll = new Poll({
+      question,
+      option1: { text: option1Text },
+      option2: { text: option2Text },
+      isLive: true
+    });
+
+    await poll.save();
+    res.status(201).json(poll);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+
+//  Get All Polls
+app.get('/polls', async (req, res) => {
+  try {
+    const polls = await Poll.find();
+    res.json(polls);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get('/polls/active', async (req, res) => {
+  try {
+    const poll = await Poll.findOne({ isLive: true });
+    if (!poll) return res.json({ poll: null });
+    res.json({ poll });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+//  Get Single Poll
+app.get('/polls/:id', async (req, res) => {
+  try {
+    const poll = await Poll.findById(req.params.id);
+    if (!poll) return res.status(404).json({ error: 'Poll not found' });
+    res.json(poll);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+//  Vote (option = 1 or 2, incrementBy = any number)
+app.post('/polls/:id/vote', authenticateJWT, async (req, res) => {
+  try {
+    const { option, incrementBy } = req.body; 
+
+    if (!incrementBy || incrementBy <= 0) {
+      return res.status(400).json({ error: 'incrementBy must be > 0' });
+    }
+
+    const poll = await Poll.findById(req.params.id);
+    if (!poll) return res.status(404).json({ error: 'Poll not found' });
+    if (!poll.isLive) return res.status(400).json({ error: 'Poll ended' });
+
+    if (option === 1) {
+      poll.option1.votes += incrementBy;
+    } else if (option === 2) {
+      poll.option2.votes += incrementBy;
+    } else {
+      return res.status(400).json({ error: 'Invalid option (must be 1 or 2)' });
+    }
+
+    await poll.save();
+    res.json(poll);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// End Poll
+app.patch('/polls/:id/end',authenticateJWT, async (req, res) => {
+  try {
+    const poll = await Poll.findByIdAndUpdate(
+      req.params.id,
+      { isLive: false },
+      { new: true }
+    );
+    if (!poll) return res.status(404).json({ error: 'Poll not found' });
+    res.json(poll);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+//  Delete Poll
+app.delete('/polls/:id', authenticateJWT, async (req, res) => {
+  try {
+    const poll = await Poll.findByIdAndDelete(req.params.id);
+    if (!poll) return res.status(404).json({ error: 'Poll not found' });
+    res.json({ message: 'Poll deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+
 app.get('/api/verify-token', authenticateJWT, (req, res) => {
   res.status(200).json({ message: 'Token valid' });
 });
 
-// ADD Presale End Date/Time (admin protected)
-app.post('/api/presale-end', authenticateJWT, async (req, res) => {
+
+// Add credits for a user
+app.post('/api/credits/add', authenticateJWT, async (req, res) => {
   await connectDB();
-  const { endDateTime } = req.body;
-  if (!endDateTime) return res.status(400).json({ message: 'endDateTime is required' });
+  const { userId, credits } = req.body;
+
+  if (!userId || !credits || credits <= 0) {
+    return res.status(400).json({ error: 'userId and credits (>0) are required' });
+  }
 
   try {
-    // either update existing or create new
-    let record = await PresaleEnd.findOne();
-    if (record) {
-      record.endDateTime = new Date(endDateTime);
-      await record.save();
-    } else {
-      record = await PresaleEnd.create({ endDateTime: new Date(endDateTime) });
+    // upsert: if userId exists, increment; else create new
+    const userCredit = await UserCredit.findOneAndUpdate(
+      { userId },
+      { $inc: { boughtCredits: credits } },
+      { new: true, upsert: true } // create doc if missing
+    );
+
+    res.json({ message: 'Credits added', userCredit });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Subtract credits for a user
+app.post('/api/credits/subtract', authenticateJWT, async (req, res) => {
+  await connectDB();
+  const { userId, credits } = req.body;
+
+  if (!userId || !credits || credits <= 0) {
+    return res.status(400).json({ error: 'userId and credits (>0) are required' });
+  }
+
+  try {
+    const userCredit = await UserCredit.findOne({ userId });
+
+    if (!userCredit) {
+      return res.status(404).json({ error: 'User not found' });
     }
-    res.json({ message: 'Presale end date saved', data: record });
+
+    if (userCredit.boughtCredits < credits) {
+      return res.status(400).json({ error: 'Insufficient credits' });
+    }
+
+    userCredit.boughtCredits -= credits;
+    await userCredit.save();
+
+    res.json({ message: 'Credits subtracted', userCredit });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// GET Presale End Date/Time
-app.get('/api/presale-end', async (req, res) => {
+
+app.get('/api/credits/:userId', async (req, res) => {
   await connectDB();
   try {
-    const record = await PresaleEnd.findOne().sort({ createdAt: -1 });
-    res.json(record || { message: 'No presale end date set yet' });
+    const userCredit = await UserCredit.findOne({ userId: req.params.userId });
+    if (!userCredit) return res.json({ boughtCredits: 0 });
+    res.json(userCredit);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ error: err.message });
   }
 });
 
 
-// ADD/UPDATE Progress Bar Value (admin protected)
+
+app.get('/api/init-admin', async (req, res) => {
+  await initializeAdmin();
+  res.send('Tried initializing admin');
+});
+
+// if (process.env.NODE_ENV !== 'production') {
+//   const PORT = process.env.PORT || 5000;
+//   app.listen(PORT, () => {
+//     console.log(`Server running on http://localhost:${PORT}`);
+//   });
+// }
+
+
+
+// ✅ Get All Polls
+app.get('/polls', async (req, res) => {
+  try {
+    const polls = await Poll.find().sort({ createdAt: -1 }); // newest first
+    res.json(polls);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+
+
+module.exports = app;
+
+
+
+
+
+
+
+
+
+
+
+
+
+// import dotenv from 'dotenv';
+// import express from 'express';
+// import mongoose from 'mongoose';
+// import cors from 'cors';
+// import bcrypt from 'bcrypt';
+// import jwt from 'jsonwebtoken';
+
+// dotenv.config();
+// const app = express();
+
+// app.use(cors());
+// app.use(express.json());
+
+// // === Prevent repeated DB connection ===
+// let isConnected;
+// async function connectDB() {
+//   if (isConnected) return;
+//   await mongoose.connect(process.env.Database_URL, {
+//     useNewUrlParser: true,
+//     useUnifiedTopology: true,
+//   });
+//   isConnected = true;
+//   console.log('MongoDB Connected');
+// }
+
+
+// connectDB()
+
+// // === PRESALE END DATE/TIME MODEL ===
+// const presaleEndSchema = new mongoose.Schema({
+//   endDateTime: { type: Date, required: true }
+// }, { timestamps: true });
+
+// const PresaleEnd = mongoose.models.PresaleEnd || mongoose.model("PresaleEnd", presaleEndSchema);
+
+
+// // === PROGRESS BAR VALUE MODEL ===
+// const progressBarSchema = new mongoose.Schema({
+//   value: { type: Number, required: true } // store percentage or number of tokens
+// }, { timestamps: true });
+
+// const ProgressBar = mongoose.models.ProgressBar || mongoose.model("ProgressBar", progressBarSchema);
+
+
+// const progressGoalSchema = new mongoose.Schema({
+//   value: { type: Number, required: true } // store percentage or number of tokens
+// }, { timestamps: true });
+
+// const ProgressGoal = mongoose.models.ProgressGoal || mongoose.model("ProgressGoal", progressGoalSchema);
+
+
+// const adminSchema = new mongoose.Schema({
+//   password: String,
+//   initialized: { type: Boolean, default: false },
+// });
+
+// const Admin = mongoose.models.Admin || mongoose.model("Admin", adminSchema);
+
+// const walletAddressSchema = new mongoose.Schema({
+//   address: { type: String, required: true }
+// }, { timestamps: true });
+
+// const WalletAddress = mongoose.models.WalletAddress || mongoose.model("WalletAddress", walletAddressSchema);
+
+
+// // === Middleware ===
+// const authenticateJWT = (req, res, next) => {
+//   const token = req.headers.authorization?.split(' ')[1];
+//   if (!token) return res.status(401).json({ message: 'Unauthorized' });
+
+//   try {
+//     jwt.verify(token, process.env.JWT_SECRET);
+//     next();
+//   } catch (error) {
+//     res.status(403).json({ message: 'Invalid token' });
+//   }
+// };
+
+
+// async function initializeAdmin() {
+//   await connectDB();
+
+//   try {
+//     const existingAdmin = await Admin.findOne();
+//     if (existingAdmin && existingAdmin.initialized) return;
+
+//     const adminPassword = process.env.ADMIN_PASSWORD;
+//     if (!adminPassword || adminPassword.length < 8) {
+//       console.error('ADMIN_PASSWORD must be set and at least 8 characters.');
+//       return;
+//     }
+
+//     const hashedPassword = await bcrypt.hash(adminPassword, 10);
+
+//     if (existingAdmin) {
+//       existingAdmin.password = hashedPassword;
+//       existingAdmin.initialized = true;
+//       await existingAdmin.save();
+//     } else {
+//       await new Admin({ password: hashedPassword, initialized: true }).save();
+//     }
+//   } catch (err) {
+//     console.error('Error initializing admin:', err.message);
+//   }
+// }
+
+
+// app.post('/api/authenticate', async (req, res) => {
+//   await connectDB();
+//   const { password } = req.body;
+//   if (!password || password.length < 8)
+//     return res.status(400).json({ message: 'Password must be at least 8 characters' });
+
+//   try {
+//     const admin = await Admin.findOne();
+//     if (!admin || !admin.initialized)
+//       return res.status(401).json({ message: 'Admin account not initialized' });
+
+//     const match = await bcrypt.compare(password, admin.password);
+//     if (match) {
+//       const token = jwt.sign({ admin: true }, process.env.JWT_SECRET, { expiresIn: '1h' });
+//       return res.json({ token });
+//     } else {
+//       return res.status(401).json({ message: 'Invalid password' });
+//     }
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: 'Server error' });
+//   }
+// });
+
+// app.get('/api/verify-token', authenticateJWT, (req, res) => {
+//   res.status(200).json({ message: 'Token valid' });
+// });
+
+// // ADD Presale End Date/Time (admin protected)
+// app.post('/api/presale-end', authenticateJWT, async (req, res) => {
+//   await connectDB();
+//   const { endDateTime } = req.body;
+//   if (!endDateTime) return res.status(400).json({ message: 'endDateTime is required' });
+
+//   try {
+//     // either update existing or create new
+//     let record = await PresaleEnd.findOne();
+//     if (record) {
+//       record.endDateTime = new Date(endDateTime);
+//       await record.save();
+//     } else {
+//       record = await PresaleEnd.create({ endDateTime: new Date(endDateTime) });
+//     }
+//     res.json({ message: 'Presale end date saved', data: record });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: 'Server error' });
+//   }
+// });
+
+// // GET Presale End Date/Time
+// app.get('/api/presale-end', async (req, res) => {
+//   await connectDB();
+//   try {
+//     const record = await PresaleEnd.findOne().sort({ createdAt: -1 });
+//     res.json(record || { message: 'No presale end date set yet' });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: 'Server error' });
+//   }
+// });
+
+
+// // ADD/UPDATE Progress Bar Value (admin protected)
+// // app.post('/api/progress-bar', authenticateJWT, async (req, res) => {
+// //   await connectDB();
+// //   const { value } = req.body;
+// //   if (value === undefined) return res.status(400).json({ message: 'value is required' });
+
+// //   try {
+// //     let record = await ProgressBar.findOne();
+// //     if (record) {
+// //       record.value = value;
+// //       await record.save();
+// //     } else {
+// //       record = await ProgressBar.create({ value });
+// //     }
+// //     res.json({ message: 'Progress bar value saved', data: record });
+// //   } catch (err) {
+// //     console.error(err);
+// //     res.status(500).json({ message: 'Server error' });
+// //   }
+// // });
+
+// // ADD/UPDATE Progress Bar Value (admin protected)
 // app.post('/api/progress-bar', authenticateJWT, async (req, res) => {
 //   await connectDB();
-//   const { value } = req.body;
-//   if (value === undefined) return res.status(400).json({ message: 'value is required' });
+//   let { value } = req.body;
+
+//   // Validate presence
+//   if (value === undefined) {
+//     return res.status(400).json({ message: 'value is required' });
+//   }
+
+//   // Clamp value between 0 and 100
+//   // value = Math.max(0, Math.min(Number(value), 100));
 
 //   try {
 //     let record = await ProgressBar.findOne();
@@ -189,146 +603,118 @@ app.get('/api/presale-end', async (req, res) => {
 //   }
 // });
 
-// ADD/UPDATE Progress Bar Value (admin protected)
-app.post('/api/progress-bar', authenticateJWT, async (req, res) => {
-  await connectDB();
-  let { value } = req.body;
+// ProgressGoal
 
-  // Validate presence
-  if (value === undefined) {
-    return res.status(400).json({ message: 'value is required' });
-  }
+// app.post('/api/progress-goal', authenticateJWT, async (req, res) => {
+//   await connectDB();
+//   let { value } = req.body;
 
-  // Clamp value between 0 and 100
-  // value = Math.max(0, Math.min(Number(value), 100));
+//   // Validate presence
+//   if (value === undefined) {
+//     return res.status(400).json({ message: 'value is required' });
+//   }
 
-  try {
-    let record = await ProgressBar.findOne();
-    if (record) {
-      record.value = value;
-      await record.save();
-    } else {
-      record = await ProgressBar.create({ value });
-    }
-    res.json({ message: 'Progress bar value saved', data: record });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
+//   // Clamp value between 0 and 100
+//   // value = Math.max(0, Math.min(Number(value), 100));
 
-ProgressGoal
+//   try {
+//     let record = await ProgressGoal.findOne();
+//     if (record) {
+//       record.value = value;
+//       await record.save();
+//     } else {
+//       record = await ProgressGoal.create({ value });
+//     }
+//     res.json({ message: 'Progress goal value saved', data: record });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: 'Server error' });
+//   }
+// });
 
-app.post('/api/progress-goal', authenticateJWT, async (req, res) => {
-  await connectDB();
-  let { value } = req.body;
-
-  // Validate presence
-  if (value === undefined) {
-    return res.status(400).json({ message: 'value is required' });
-  }
-
-  // Clamp value between 0 and 100
-  // value = Math.max(0, Math.min(Number(value), 100));
-
-  try {
-    let record = await ProgressGoal.findOne();
-    if (record) {
-      record.value = value;
-      await record.save();
-    } else {
-      record = await ProgressGoal.create({ value });
-    }
-    res.json({ message: 'Progress goal value saved', data: record });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-app.get('/api/progress-goal', async (req, res) => {
-  await connectDB();
-  try {
-    const record = await ProgressGoal.findOne().sort({ createdAt: -1 });
-    res.json(record || { message: 'No progress goal value set yet' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
+// app.get('/api/progress-goal', async (req, res) => {
+//   await connectDB();
+//   try {
+//     const record = await ProgressGoal.findOne().sort({ createdAt: -1 });
+//     res.json(record || { message: 'No progress goal value set yet' });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: 'Server error' });
+//   }
+// });
 
 
-// GET Progress Bar Value
-app.get('/api/progress-bar', async (req, res) => {
-  await connectDB();
-  try {
-    const record = await ProgressBar.findOne().sort({ createdAt: -1 });
-    res.json(record || { message: 'No progress bar value set yet' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
+// // GET Progress Bar Value
+// app.get('/api/progress-bar', async (req, res) => {
+//   await connectDB();
+//   try {
+//     const record = await ProgressBar.findOne().sort({ createdAt: -1 });
+//     res.json(record || { message: 'No progress bar value set yet' });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: 'Server error' });
+//   }
+// });
 
-// ADD Wallet Address (allow multiple)
-// ADD Wallet Address (no duplicates)
-app.post('/api/wallet-address', async (req, res) => {
-  await connectDB();
-  const { address } = req.body;
+// // ADD Wallet Address (allow multiple)
+// // ADD Wallet Address (no duplicates)
+// app.post('/api/wallet-address', async (req, res) => {
+//   await connectDB();
+//   const { address } = req.body;
 
-  if (!address) return res.status(400).json({ message: 'Address is required' });
+//   if (!address) return res.status(400).json({ message: 'Address is required' });
 
-  try {
-    // Always store lowercase
-    const lowerAddr = address.toLowerCase();
+//   try {
+//     // Always store lowercase
+//     const lowerAddr = address.toLowerCase();
 
-    // check first
-    const existing = await WalletAddress.findOne({ address: lowerAddr });
-    if (existing) {
-      return res.status(409).json({ message: 'Address already exists', data: existing });
-    }
+//     // check first
+//     const existing = await WalletAddress.findOne({ address: lowerAddr });
+//     if (existing) {
+//       return res.status(409).json({ message: 'Address already exists', data: existing });
+//     }
 
-    const record = await WalletAddress.create({ address: lowerAddr });
-    res.json({ message: 'Wallet address saved', data: record });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
+//     const record = await WalletAddress.create({ address: lowerAddr });
+//     res.json({ message: 'Wallet address saved', data: record });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: 'Server error' });
+//   }
+// });
 
-// GET All Wallet Addresses
-app.get('/api/wallet-address', async (req, res) => {
-  await connectDB();
-  try {
-    const records = await WalletAddress.find({}).sort({ createdAt: -1 });
-    res.json(records);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
+// // GET All Wallet Addresses
+// app.get('/api/wallet-address', async (req, res) => {
+//   await connectDB();
+//   try {
+//     const records = await WalletAddress.find({}).sort({ createdAt: -1 });
+//     res.json(records);
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: 'Server error' });
+//   }
+// });
 
 
 
 
 
-app.get('/api/init-admin', async (req, res) => {
-  await initializeAdmin();
-  res.send('Tried initializing admin');
-});
+// app.get('/api/init-admin', async (req, res) => {
+//   await initializeAdmin();
+//   res.send('Tried initializing admin');
+// });
 
 
-// if (process.env.NODE_ENV !== 'production') {
-//   const PORT = process.env.PORT || 3000;
-//   app.listen(PORT, () => {
-//     console.log(`Server running on http://localhost:${PORT}`);
-//   });
-// }
+// // if (process.env.NODE_ENV !== 'production') {
+// //   const PORT = process.env.PORT || 3000;
+// //   app.listen(PORT, () => {
+// //     console.log(`Server running on http://localhost:${PORT}`);
+// //   });
+// // }
 
 
 
 
-export default app;
+// export default app;
 
 
 
@@ -615,6 +1001,7 @@ export default app;
 
 
 // export default app;
+
 
 
 
