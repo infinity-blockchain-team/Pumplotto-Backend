@@ -230,7 +230,7 @@ app.post('/api/progress-bar', authenticateJWT, async (req, res) => {
   }
 });
 
-ProgressGoal
+// ProgressGoal
 
 app.post('/api/progress-goal', authenticateJWT, async (req, res) => {
   await connectDB();
@@ -293,7 +293,7 @@ app.post('/api/wallet-address', async (req, res) => {
 
   try {
     // Always store lowercase
-    const lowerAddr = address.toLowerCase();
+    const lowerAddr = address;
 
     // check first
     const existing = await WalletAddress.findOne({ address: lowerAddr });
@@ -628,6 +628,7 @@ export default app;
 
 
 // export default app;
+
 
 
 
